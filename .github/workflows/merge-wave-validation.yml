@@ -1,0 +1,79 @@
+name: Pinned A2A state-boundary validation
+on:
+  push:
+    branches: [validation/merge-wave-20261007]
+    paths: [.github/workflows/merge-wave-validation.yml]
+permissions:
+  contents: read
+env:
+  BASE_SHA: 666c26db0bad86ae1b0a0557bc0fd1eeeca0d70e
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        a2a: ['0.3.26', '1.1.5']
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: 86343bf057ce02ef7af10c682ac954e622de6981
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Construct candidate on the pinned current main
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git -c core.hooksPath=/dev/null merge --no-commit --no-ff "$BASE_SHA"
+          git diff --cached --check
+          git write-tree
+      - name: Install declared A2A runtime and focused test dependencies
+        env:
+          A2A_VERSION: ${{ matrix.a2a }}
+        run: |
+          python3 -m venv "$RUNNER_TEMP/test-env"
+          "$RUNNER_TEMP/test-env/bin/python" -m pip install --quiet '.[a2a]' "a2a-sdk[http-server]==$A2A_VERSION" 'pytest>=9,<10' pytest-asyncio pytest-mock 'sqlalchemy[asyncio]>=2,<3' google-cloud-storage 'ruff==0.15.17' 'pyink==25.12'
+      - name: Run the A2A unit and integration-boundary tests
+        env:
+          GOOGLE_GENAI_USE_VERTEXAI: 'false'
+        run: |
+          "$RUNNER_TEMP/test-env/bin/python" -m pytest -q -o addopts= --junitxml="$RUNNER_TEMP/a2a.xml" tests/unittests/a2a
+          python3 - "$RUNNER_TEMP/a2a.xml" <<'PY'
+          import sys, xml.etree.ElementTree as ET
+          for suite in ET.parse(sys.argv[1]).getroot().iter('testsuite'):
+              print('A2A_SUMMARY', suite.attrib)
+          PY
+      - name: Validate the changed Python files
+        run: |
+          mapfile -t files < <(git diff --name-only "$BASE_SHA" -- '*.py')
+          "$RUNNER_TEMP/test-env/bin/python" -m ruff check "${files[@]}"
+          "$RUNNER_TEMP/test-env/bin/python" -m pyink --check "${files[@]}"
+  preserve_candidate:
+    needs: verify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: 86343bf057ce02ef7af10c682ac954e622de6981
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Reconstruct the tested candidate without executing source code
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git -c core.hooksPath=/dev/null merge --no-commit --no-ff "$BASE_SHA"
+          git diff --cached --check
+          git -c core.hooksPath=/dev/null commit -m 'Merge current main after A2A compatibility validation'
+      - name: Publish only a candidate branch for inspection
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          candidate=validation/merge-wave-20261007-pr-6859
+          gh auth setup-git
+          test -z "$(git ls-remote --heads origin "$candidate")"
+          git push origin "HEAD:refs/heads/$candidate"
+          echo "VALIDATED_CANDIDATE $candidate $(git rev-parse HEAD)"
