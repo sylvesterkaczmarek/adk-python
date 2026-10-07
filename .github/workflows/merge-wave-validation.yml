@@ -21,11 +21,20 @@ jobs:
           ref: 86343bf057ce02ef7af10c682ac954e622de6981
           fetch-depth: 0
           persist-credentials: false
-      - name: Construct candidate on the pinned current main
+      - name: Construct candidate and remove the unused test import
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git -c core.hooksPath=/dev/null merge --no-commit --no-ff "$BASE_SHA"
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('tests/unittests/a2a/integration/test_client_server_v1.py')
+          text = p.read_text()
+          unused = 'from .server import agent_card\n'
+          assert text.count(unused) == 1
+          p.write_text(text.replace(unused, ''))
+          PY
+          git add tests/unittests/a2a/integration/test_client_server_v1.py
           git diff --cached --check
           git write-tree
       - name: Install declared A2A runtime and focused test dependencies
@@ -66,8 +75,17 @@ jobs:
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git -c core.hooksPath=/dev/null merge --no-commit --no-ff "$BASE_SHA"
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('tests/unittests/a2a/integration/test_client_server_v1.py')
+          text = p.read_text()
+          unused = 'from .server import agent_card\n'
+          assert text.count(unused) == 1
+          p.write_text(text.replace(unused, ''))
+          PY
+          git add tests/unittests/a2a/integration/test_client_server_v1.py
           git diff --cached --check
-          git -c core.hooksPath=/dev/null commit -m 'Merge current main after A2A compatibility validation'
+          git -c core.hooksPath=/dev/null commit -m 'Merge current main and remove unused import after A2A validation'
       - name: Publish only a candidate branch for inspection
         env:
           GH_TOKEN: ${{ github.token }}
